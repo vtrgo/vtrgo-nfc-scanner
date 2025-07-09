@@ -1,0 +1,6 @@
+{
+    "files.associations": {
+        "mongoose_glue.h": "c"
+    },
+    "C_Cpp.default.compilerPath": "C:/mingw64/bin/gcc.exe"
+}
