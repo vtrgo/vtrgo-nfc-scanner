@@ -26,6 +26,8 @@
 #include "mongoose.h"
 #include "frozen.h"
 #include "jsmn.h"
+#include <stdlib.h>
+#include <stdio.h>
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -40,14 +42,21 @@ typedef struct {
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
-#define API_URL "http://192.168.1.233:8080/api/stats?start=-1h&stop=now()"
-#define MAX_RESPONSE_SIZE 4096
-#define MAX_EXTRACTED_NUMBERS 64
+#define API_URL "http://192.168.1.133:8080/api/stats?start=-1h&stop=now()"
+#define MAX_RESPONSE_SIZE 100000
+#define MAX_EXTRACTED_NUMBERS 256
 #define MAX_PAYLOAD_SIZE 512
-#define MAX_NDEF_SIZE 540
-#define MAX_NUMBERS 64
-#define data "{\"boolean_percentages\":{\"FeederStatusBits.AirTrackBlowerEnabled\":53.49740932642487,\"FeederStatusBits.BulkElevatorConveyorEnabledFWD\":53.49740932642487,\"FeederStatusBits.BulkElevatorConveyorEnabledREV\":0,\"FeederStatusBits.BulkElevatorLowLevel\":0,\"FeederStatusBits.OrientationSectionDriveEnabled\":0,\"FeederStatusBits.Spare\":0,\"FeederStatusBits.StepperEnabled\":0,\"LevelStatusBits.HighLevel.Lane1\":46.50259067357513,\"LevelStatusBits.HighLevel.Lane2\":53.43709468223087,\"LevelStatusBits.HighLevel.Lane3\":0,\"LevelStatusBits.HighLevel.Lane4\":0,\"LevelStatusBits.HighLevel.Lane5\":0,\"LevelStatusBits.HighLevel.Lane6\":0,\"LevelStatusBits.HighLevel.Lane7\":0,\"LevelStatusBits.HighLevel.Lane8\":0,\"LevelStatusBits.NotAtLowLevel.Lane1\":46.50259067357513,\"LevelStatusBits.NotAtLowLevel.Lane2\":53.43709468223087,\"LevelStatusBits.NotAtLowLevel.Lane3\":0,\"LevelStatusBits.NotAtLowLevel.Lane4\":0,\"LevelStatusBits.NotAtLowLevel.Lane5\":0,\"LevelStatusBits.NotAtLowLevel.Lane6\":0,\"LevelStatusBits.NotAtLowLevel.Lane7\":0,\"LevelStatusBits.NotAtLowLevel.Lane8\":0,\"SystemStatusBits.AirPressureOk\":100,\"SystemStatusBits.AutoMode\":100,\"SystemStatusBits.ControlPowerOn\":100,\"SystemStatusBits.PurgeMode\":0,\"SystemStatusBits.SystemFaulted\":0,\"SystemStatusBits.SystemIdle\":0},\"fault_counts\":{\"FaultBits.AirPressureNotOkFault\":0,\"FaultBits.AirTrackBlowerFault\":0,\"FaultBits.BulkElevatorConveyorFault\":0,\"FaultBits.JamInOrientation.Lane1\":332,\"FaultBits.JamInOrientation.Lane2\":0,\"FaultBits.JamInOrientation.Lane3\":332,\"FaultBits.JamInOrientation.Lane4\":0,\"FaultBits.JamInOrientation.Lane5\":0,\"FaultBits.JamInOrientation.Lane6\":0,\"FaultBits.JamInOrientation.Lane7\":0,\"FaultBits.JamInOrientation.Lane8\":0,\"FaultBits.JamInStorage.Lane1\":0,\"FaultBits.JamInStorage.Lane2\":0,\"FaultBits.JamInStorage.Lane3\":0,\"FaultBits.JamInStorage.Lane4\":0,\"FaultBits.JamInStorage.Lane5\":0,\"FaultBits.JamInStorage.Lane6\":0,\"FaultBits.JamInStorage.Lane7\":0,\"FaultBits.JamInStorage.Lane8\":0,\"FaultBits.OrientationSectionDriveFault\":386,\"FaultBits.PlcToPlcFault\":61,\"FaultBits.StepperFault\":0},\"float_averages\":{\"Floats.AirTrackBlower.Speed\":198.66642381569204,\"Floats.OrientationSectionDrive.Temperature\":198.6398539339026,\"Floats.OrientationSectionDrive.VibrationX\":198.49442135066167,\"Floats.OrientationSectionDrive.VibrationY\":198.49728547238945,\"Floats.OrientationSectionDrive.VibrationZ\":801.4288238665528,\"Floats.Performance.PartsPerMinute\":40.16731803510442}}"
+#define MAX_NDEF_SIZE 8000
+#define MAX_NUMBERS 56
+#define MAX_VALUES 1024
+#define OUTPUT_BUF_SIZE 6000
 
+typedef struct {
+  char start_time[32];
+  int interval_sec;
+  float values[MAX_VALUES];
+  int count;
+} ParsedData;
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -91,7 +100,6 @@ float extracted_numbers[MAX_EXTRACTED_NUMBERS];
 int number_count = 0;
 
 #define numbercount 0
-#define MAX_VALUES 64
 
 /* USER CODE END PV */
 
@@ -129,45 +137,61 @@ int _write(int fd, unsigned char *buf, int len) {
 }
 
 static void http_event_handler(struct mg_connection *c, int ev, void *ev_data, void *fn_data) {
-	if (ev == MG_EV_HTTP_MSG) {
+  if (ev == MG_EV_HTTP_MSG) {
     struct mg_http_message *hm = (struct mg_http_message *) ev_data;
+
+    // Fix: use pointer for header
+    const struct mg_str *cl_hdr = mg_http_get_header(hm, "Content-Length");
+    size_t expected_len = 0;
+    if (cl_hdr != NULL && cl_hdr->len > 0) {
+      expected_len = (size_t) atoi(cl_hdr->buf);
+    }
+
+    printf("Received body length: %d\r\n", (int) hm->body.len);
+    if (expected_len > 0 && hm->body.len < expected_len) {
+      // Incomplete body, wait for more
+      return;
+    }
+
     size_t copy_len = hm->body.len < MAX_RESPONSE_SIZE - 1 ? hm->body.len : MAX_RESPONSE_SIZE - 1;
     memcpy(response_buf, hm->body.buf, copy_len);
     response_buf[copy_len] = '\0';
     response_len = copy_len;
+
     printf("HTTP Response: %.*s\r\n", (int) response_len, response_buf);
+
     request_done = true;
-    c->is_closing = 1;
-  } else if (ev == MG_EV_CLOSE && !request_done) {
+  }
+  else if (ev == MG_EV_CLOSE && !request_done) {
     printf("HTTP request failed or connection closed early\r\n");
   }
 }
 
 
+
+
 void perform_http_data_read(void) {
   request_done = false;
 
-  // Use the global manager directly
   struct mg_connection *c = mg_http_connect(&g_mgr, API_URL, http_event_handler, NULL);
   if (c == NULL) {
     printf("HTTP connect failed\r\n");
     return;
   }
 
-  // Send GET request
-  mg_printf(c, "GET %s HTTP/1.0\r\nHost: 192.168.1.233\r\n\r\n", "/api/stats?start=-1h&stop=now()");
+  mg_printf(c, "GET %s HTTP/1.0\r\nHost: 192.168.1.133\r\n\r\n", "/api/stats?start=-1h&stop=now()");
 
-  // Poll until request is done or timeout hits
   uint32_t start = HAL_GetTick();
-  while (!request_done && HAL_GetTick() - start < 5000) {
-    mg_mgr_poll(&g_mgr, 1);  // Poll for events
-    HAL_Delay(1);            // Give other threads (like LWIP) time to breathe
+  while (!request_done && HAL_GetTick() - start < 7000) {
+    mg_mgr_poll(&g_mgr, 10);  // Poll with more responsiveness
+    HAL_Delay(1);
   }
 
   if (!request_done) {
-    printf("Request timed out\r\n");
+    printf("Request timed out or incomplete\r\n");
   }
 }
+
 
 
 void wait_for_network_ready(void) {
@@ -177,134 +201,6 @@ void wait_for_network_ready(void) {
     HAL_Delay(1);
   }
 }
-
-void collect_plc_data(PLC_Snapshot *snapshot) {
-    uint16_t val;
-
-    // Read status_bits[0..3] from registers 1000–1003
-    for (int i = 0; i < 4; i++) {
-        glue_modbus_read_reg(1000 + i, &val);
-        snapshot->status_bits[i] = val;
-        MG_INFO(("status_bits[%d] (reg %d) = %04X", i, 1000 + i, val));
-    }
-
-    // Read data_words[0..105] from registers 1004–1109
-    for (int i = 0; i < 106; i++) {
-        glue_modbus_read_reg(1004 + i, &val);
-        snapshot->data_words[i] = val;
-        if (i < 20 || i > 100) {  // Limit log volume
-            MG_INFO(("data_words[%d] (reg %d) = %04X", i, 1004 + i, val));
-        }
-    }
-
-    MG_INFO(("Snapshot struct size: %d", (int) sizeof(PLC_Snapshot)));
-}
-
-
-
-void write_snapshot_to_nfc(void) {
-    uint16_t i2c_addr = 0x53 << 1;        // 0xA6
-    uint16_t mem_addr = 0x0008;           // NDEF message start offset
-    HAL_StatusTypeDef status;
-
-    PLC_Snapshot snapshot;
-    collect_plc_data(&snapshot); // Assume this populates the snapshot struct
-
-    printf("Snapshot size: %u\n", (unsigned int) sizeof(snapshot));
-    printf("Float count: %d\n", number_count);
-
-    if (number_count == 0 || number_count > 64) {
-        printf("Invalid float count: %d\n", number_count);
-        return;
-    }
-
-    // Prepare combined payload: [snapshot][count][floats]
-    size_t snapshot_size = sizeof(snapshot);
-    size_t float_bytes = 1 + number_count * sizeof(float);
-    size_t payload_length = snapshot_size + float_bytes;
-
-    uint8_t payload[MAX_PAYLOAD_SIZE];
-    if (payload_length > MAX_PAYLOAD_SIZE) {
-        printf("Error: Payload is too large for the buffer!\n");
-        return;
-    }
-
-    memcpy(payload, &snapshot, snapshot_size);
-    payload[snapshot_size] = (uint8_t) number_count;
-    memcpy(&payload[snapshot_size + 1], extracted_numbers, number_count * sizeof(float));
-
-    const char* mime_type = "application/octet-stream";
-    uint8_t type_length = strlen(mime_type);
-    uint8_t ndef_header_size = 1 + 1 + 4;
-    uint32_t ndef_record_length = ndef_header_size + type_length + payload_length;
-
-    uint8_t ndef_buffer[MAX_NDEF_SIZE];
-    uint16_t total_ndef_message_size = 0;
-
-    ndef_buffer[total_ndef_message_size++] = 0x03;  // TLV type
-
-    if (ndef_record_length < 0xFF) {
-        ndef_buffer[total_ndef_message_size++] = (uint8_t) ndef_record_length;
-    } else {
-        ndef_buffer[total_ndef_message_size++] = 0xFF;
-        ndef_buffer[total_ndef_message_size++] = (ndef_record_length >> 8) & 0xFF;
-        ndef_buffer[total_ndef_message_size++] = ndef_record_length & 0xFF;
-    }
-
-    ndef_buffer[total_ndef_message_size++] = 0xC2; // MB=1, ME=1, SR=0, TNF=MIME
-    ndef_buffer[total_ndef_message_size++] = type_length;
-
-    ndef_buffer[total_ndef_message_size++] = (payload_length >> 24) & 0xFF;
-    ndef_buffer[total_ndef_message_size++] = (payload_length >> 16) & 0xFF;
-    ndef_buffer[total_ndef_message_size++] = (payload_length >> 8) & 0xFF;
-    ndef_buffer[total_ndef_message_size++] = payload_length & 0xFF;
-
-    memcpy(&ndef_buffer[total_ndef_message_size], mime_type, type_length);
-    total_ndef_message_size += type_length;
-
-    memcpy(&ndef_buffer[total_ndef_message_size], payload, payload_length);
-    total_ndef_message_size += payload_length;
-
-    ndef_buffer[total_ndef_message_size++] = 0xFE;
-
-    printf("Payload + floats total: %lu\n", (unsigned long) payload_length);
-    printf("NDEF Record length: %u\n", ndef_record_length);
-    printf("Total NDEF Message to Write (including TLV and Terminator): %u bytes\n", total_ndef_message_size);
-
-    printf("NFC TLV Dump (%d bytes):\n", total_ndef_message_size);
-    for (int j = 0; j < total_ndef_message_size; j++) {
-        if (j % 16 == 0) printf("\n%04X  ", j);
-        printf("%02X ", ndef_buffer[j]);
-    }
-    printf("\n");
-
-    // Chunked write to NFC
-    const uint16_t MAX_CHUNK_SIZE = 128;
-    uint16_t bytes_remaining = total_ndef_message_size;
-    uint16_t offset = 0;
-
-    while (bytes_remaining > 0) {
-        uint16_t chunk_size = (bytes_remaining > MAX_CHUNK_SIZE) ? MAX_CHUNK_SIZE : bytes_remaining;
-
-        status = HAL_I2C_Mem_Write(&hi2c1, i2c_addr, mem_addr + offset,
-                                   I2C_MEMADD_SIZE_16BIT,
-                                   &ndef_buffer[offset], chunk_size,
-                                   HAL_MAX_DELAY);
-
-        if (status != HAL_OK) {
-            printf("I2C chunk write failed at offset %d, status: %d\n", offset, status);
-            return;
-        }
-        HAL_Delay(100);
-        offset += chunk_size;
-        bytes_remaining -= chunk_size;
-    }
-
-    printf("I2C chunked write successful.\n");
-}
-
-
-
 
 
 
@@ -317,84 +213,386 @@ double mg_str_to_d(struct mg_str s) {
 }
 
 
-void parse_numbers_recursive(struct mg_str json, float *dest_array, int max_count, int *out_count) {
-    size_t offset = 0;
-    struct mg_str key, val;
 
-    while ((offset = mg_json_next(json, offset, &key, &val)) != 0) {
-        // Check if it's a number by trying to convert it
-        if (val.len > 0 && (isdigit(val.buf[0]) || val.buf[0] == '-' || val.buf[0] == '+')) {
-            double num = mg_str_to_d(val);  // ✅ Convert raw mg_str to double
-            if (*out_count < max_count) {
-                dest_array[*out_count] = (float) num;
-                (*out_count)++;
-            }
-        } else if (val.len > 0 && val.buf[0] == '{') {
-            // Recurse into nested object
-            parse_numbers_recursive(val, dest_array, max_count, out_count);
-        }
-    }
-}
+void write_json_to_nfc(const char *json_data, size_t json_len) {
+    uint16_t i2c_addr = 0x53 << 1;   // ST25DV I2C address
+    uint16_t mem_addr = 0x0008;      // NDEF start offset
+    HAL_StatusTypeDef status;
 
-
-void parse_and_store_numbers(const char *json_data, size_t len,
-                             float *dest_array, int max_count, int *out_count) {
-    struct mg_str json = mg_str_n(json_data, len);
-    *out_count = 0;
-    parse_numbers_recursive(json, dest_array, max_count, out_count);
-
-    if (*out_count == 0) {
-        printf("No numbers found in JSON.\n");
-    } else if (*out_count >= max_count) {
-        printf("Warning: hit max count, some values may be skipped.\n");
-    }
-}
-
-static int is_numeric_token(const char *json, jsmntok_t *tok) {
-    for (int i = tok->start; i < tok->end; i++) {
-        if ((json[i] >= '0' && json[i] <= '9') || json[i] == '.' || json[i] == '-') continue;
-        return 0;
-    }
-    return 1;
-}
-
-void extract_numbers(const char *json) {
-    jsmn_parser p;
-    jsmntok_t tokens[512];
-    jsmn_init(&p);
-    int r = jsmn_parse(&p, json, strlen(json), tokens, sizeof(tokens)/sizeof(tokens[0]));
-
-    if (r < 0) {
-        printf("Failed to parse JSON: %d\n", r);
+    if (json_len > 8000) {
+        printf("Error: JSON too large for NFC memory (%lu bytes)\n", (unsigned long)json_len);
         return;
     }
 
-    number_count = 0;
+    const char* mime_type = "application/json";
+    uint8_t type_length = strlen(mime_type);
+    uint8_t ndef_header_size = 1 + 1 + 4;
 
-    for (int i = 1; i < r && number_count < MAX_NUMBERS; i++) {
-        if (tokens[i].type == JSMN_PRIMITIVE && is_numeric_token(json, &tokens[i])) {
-            char temp[32];
-            int len = tokens[i].end - tokens[i].start;
-            if (len < sizeof(temp)) {
-                memcpy(temp, json + tokens[i].start, len);
-                temp[len] = '\0';
-                extracted_numbers[number_count++] = strtof(temp, NULL);
-            }
+    uint32_t payload_length = json_len;
+    uint32_t ndef_record_length = ndef_header_size + type_length + payload_length;
+
+    uint8_t ndef_buffer[MAX_NDEF_SIZE];
+    uint16_t total_ndef_message_size = 0;
+
+    // TLV block
+    ndef_buffer[total_ndef_message_size++] = 0x03;  // TLV type
+    if (ndef_record_length < 0xFF) {
+        ndef_buffer[total_ndef_message_size++] = (uint8_t)ndef_record_length;
+    } else {
+        ndef_buffer[total_ndef_message_size++] = 0xFF;
+        ndef_buffer[total_ndef_message_size++] = (ndef_record_length >> 8) & 0xFF;
+        ndef_buffer[total_ndef_message_size++] = ndef_record_length & 0xFF;
+    }
+
+    // NDEF Record header
+    ndef_buffer[total_ndef_message_size++] = 0xC2;  // MIME type record
+    ndef_buffer[total_ndef_message_size++] = type_length;
+    ndef_buffer[total_ndef_message_size++] = (payload_length >> 24) & 0xFF;
+    ndef_buffer[total_ndef_message_size++] = (payload_length >> 16) & 0xFF;
+    ndef_buffer[total_ndef_message_size++] = (payload_length >> 8) & 0xFF;
+    ndef_buffer[total_ndef_message_size++] = payload_length & 0xFF;
+
+    memcpy(&ndef_buffer[total_ndef_message_size], mime_type, type_length);
+    total_ndef_message_size += type_length;
+
+    memcpy(&ndef_buffer[total_ndef_message_size], json_data, payload_length);
+    total_ndef_message_size += payload_length;
+
+    ndef_buffer[total_ndef_message_size++] = 0xFE;  // Terminator TLV
+
+    printf("JSON length: %lu\n", (unsigned long)json_len);
+    printf("Total NDEF size: %u bytes\n", total_ndef_message_size);
+
+    // I2C chunked write to NFC
+    const uint16_t MAX_CHUNK_SIZE = 64;
+    uint16_t bytes_remaining = total_ndef_message_size;
+    uint16_t offset = 0;
+
+    while (bytes_remaining > 0) {
+        uint16_t chunk_size = (bytes_remaining > MAX_CHUNK_SIZE) ? MAX_CHUNK_SIZE : bytes_remaining;
+
+        status = HAL_I2C_Mem_Write(&hi2c1, i2c_addr, mem_addr + offset,
+                                   I2C_MEMADD_SIZE_16BIT,
+                                   &ndef_buffer[offset], chunk_size,
+                                   HAL_MAX_DELAY);
+
+        if (status != HAL_OK) {
+            printf("I2C chunk write failed at offset %d, status: %d\r\n", offset, status);
+            return;
         }
+
+        HAL_Delay(100);  // Wait for memory to settle
+        offset += chunk_size;
+        bytes_remaining -= chunk_size;
+    }
+
+    printf("I2C chunked write successful.\r\n");
+}
+
+bool parse_float_request_fields(const char *json_data, size_t len,
+                                struct mg_str *out_field,
+                                struct mg_str *out_start,
+                                struct mg_str *out_stop) {
+    struct mg_str json = mg_str_n(json_data, len);
+    struct mg_str key, val;
+    size_t offset = 0;
+
+    *out_field = mg_str_n(NULL, 0);
+    *out_start = mg_str_n(NULL, 0);
+    *out_stop  = mg_str_n(NULL, 0);
+
+    printf("🧪 Parsing JSON: %.*s\r\n", (int) json.len, json.buf);
+    // Check if JSON is double-encoded (starts with quote)
+    if (json_data[0] == '"' && json_data[len - 1] == '"') {
+        printf("⚠️  JSON appears to be string-encoded, unescaping...\r\n");
+
+        static char unescaped[1024];
+        size_t j = 0;
+
+        for (size_t i = 1; i < len - 1 && j < sizeof(unescaped) - 1; i++) {
+            if (json_data[i] == '\\' && i + 1 < len - 1) {
+                i++;  // Skip backslash
+            }
+            unescaped[j++] = json_data[i];
+        }
+
+        unescaped[j] = '\0';
+        json_data = unescaped;
+        len = strlen(unescaped);
+
+        printf("🔓 Unescaped JSON: %s\n\r", json_data);
     }
 
 
-     printf("Extracted %d numbers:\r\n", number_count);
-     for (int i = 0; i < number_count; i++) {
-         printf("  [%2d] %.6f\r\n", i, extracted_numbers[i]);
-     }
-//     printf("[");
-//    for (int i = 0; i < number_count; i++) {
-//        printf("%f", extracted_numbers[i]);
-//        if (i < number_count - 1) printf(", ");
-//    }
-//    printf("]\n");
+    while ((offset = mg_json_next(json, offset, &key, &val)) > 0) {
+    	printf("🔍 Found Key: %.*s | Value: %.*s\n", (int)key.len, key.buf, (int)val.len, val.buf);
 
+
+    	if (mg_match(key, mg_str("\"field\""), NULL)) {
+    	    *out_field = val;
+    	    printf("✅ Matched 'field': %.*s\r\n", (int) val.len, val.buf);
+    	} else if (mg_match(key, mg_str("\"start\""), NULL)) {
+    	    *out_start = val;
+    	    printf("✅ Matched 'start': %.*s\r\n", (int) val.len, val.buf);
+    	} else if (mg_match(key, mg_str("\"stop\""), NULL)) {
+    	    *out_stop = val;
+    	    printf("✅ Matched 'stop': %.*s\r\n", (int) val.len, val.buf);
+    	} else {
+    	    // This will now correctly show "cmd" as the non-match
+    	    printf("❌ No match for key: %.*s\r\n", (int) key.len, key.buf);
+    	}
+    }
+
+    // Final report
+    printf("📦 Parsed values:\r\n");
+    printf("   field: %.*s\r\n", (int) out_field->len, out_field->buf);
+    printf("   start: %.*s\r\n", (int) out_start->len, out_start->buf);
+    printf("   stop : %.*s\r\n", (int) out_stop->len, out_stop->buf);
+
+    if (out_field->len > 0 && out_start->len > 0 && out_stop->len > 0) {
+        printf("✅ All required fields extracted.\r\n");
+        return true;
+    } else {
+        printf("❌ Missing one or more required fields.\r\n");
+        return false;
+    }
+}
+
+void copy_and_strip_quotes(struct mg_str src, char *dest, size_t dest_size) {
+    size_t j = 0;
+    for (size_t i = 0; i < src.len && j < dest_size - 1; i++) {
+        if (src.buf[i] != '"') {
+            dest[j++] = src.buf[i];
+        }
+    }
+    dest[j] = '\0';
+}
+
+
+
+void read_phone_request_json(void) {
+    uint16_t i2c_addr = 0x53 << 1;
+    uint16_t mem_addr = 0x0008;
+    uint8_t buf[256];
+
+    // Read first 256 bytes of EEPROM
+    if (HAL_I2C_Mem_Read(&hi2c1, i2c_addr, mem_addr, I2C_MEMADD_SIZE_16BIT, buf, sizeof(buf), HAL_MAX_DELAY) != HAL_OK) {
+        printf("I2C read failed\n");
+        return;
+    }
+
+    uint16_t i = 0;
+
+    if (buf[i++] != 0x03) {
+        printf("Not an NDEF TLV.\n");
+        return;
+    }
+
+    uint8_t tlv_length = buf[i++];  // assuming < 255 bytes
+
+    // NDEF record header
+    if (buf[i++] != 0xD1) {
+        printf("Not a text record from phone.\n");
+        return;
+    }
+
+    uint8_t type_len = buf[i++];
+    uint8_t payload_len = buf[i++];
+
+    // skip type string ("T")
+    i += type_len;
+
+    // first byte of payload is encoding/language code (usually 0x02)
+    i++;
+
+    // JSON string starts here
+    char json[240];
+    memcpy(json, &buf[i], payload_len - 1);
+    json[payload_len - 1] = '\0';
+
+    printf("📥 Received JSON from phone: %s\n", json);
+
+
+    char *json_data = strchr(json, '{');  // Find the first '{' character
+    if (!json_data) {
+        printf("❌ No JSON object found in payload\n");
+        return;
+    }
+
+    // Step 2: Declare output variables
+    struct mg_str field, start, stop;
+
+    printf("Raw JSON: %s\n", json_data);
+
+
+    // Step 3: Parse for cmd/field/start/stop
+    if (parse_float_request_fields(json_data, strlen(json_data), &field, &start, &stop)) {
+        // Step 4: Use them to build the HTTP URL
+        char url[256];
+        snprintf(url, sizeof(url),
+                 "http://192.168.1.133:8080/api/float-range?field=%.*s&start=%.*s&stop=%.*s",
+                 (int) field.len, field.buf,
+                 (int) start.len, start.buf,
+                 (int) stop.len,  stop.buf);
+
+        printf("🌐 Generated HTTP URL:\n%s\n", url);
+
+        char field_buf[128], start_buf[64], stop_buf[64];
+
+        copy_and_strip_quotes(field, field_buf, sizeof(field_buf));
+        copy_and_strip_quotes(start, start_buf, sizeof(start_buf));
+        copy_and_strip_quotes(stop,  stop_buf,  sizeof(stop_buf));
+
+        printf("✅ Clean URL:\n");
+        printf("http://192.168.1.133:8080/api/float-range?field=%s&start=%s&stop=%s\n",
+               field_buf, start_buf, stop_buf);
+
+        char full_path[256];
+        snprintf(full_path, sizeof(full_path),
+                 "/api/float-range?field=%s&start=%s&stop=%s",
+                 field_buf, start_buf, stop_buf);
+
+        // Optional debug print
+        printf("✅ Clean path: %s\n", full_path);
+        wait_for_network_ready();
+        perform_http_get(full_path);
+    	HAL_Delay(1000);
+
+        // Optionally perform the HTTP request here...
+        // perform_http_get(url);
+    } else {
+        printf("❌ Failed to extract field/start/stop from JSON\n");
+    }
+}
+
+void perform_http_get(const char *path) {
+  request_done = false;
+
+  printf("🌐 Starting HTTP GET for path: %s\r\n", path);
+
+  // Connect to server
+  struct mg_connection *c = mg_http_connect(&g_mgr, "http://192.168.1.133:8080", http_event_handler, NULL);
+  if (c == NULL) {
+    printf("❌ HTTP connect failed\r\n");
+    return;
+  }
+
+  // Send custom GET request
+  mg_printf(c,
+    "GET %s HTTP/1.1\r\n"
+    "Host: 192.168.1.133\r\n"
+    "Connection: keep-alive\r\n\r\n",
+    path);
+
+
+
+  // Poll until request completes or times out
+  uint32_t start = HAL_GetTick();
+  while (!request_done && HAL_GetTick() - start < 5000) {
+    mg_mgr_poll(&g_mgr, 1);
+    HAL_Delay(1);
+  }
+
+  if (!request_done) {
+    printf("❌ HTTP request timed out\r\n");
+    return;
+  }
+  ParsedData parsed;
+  char compact_json[OUTPUT_BUF_SIZE];
+
+  if (parse_response_json(response_buf, &parsed)) {
+    make_compact_json(&parsed, compact_json, sizeof(compact_json));
+    printf("Compact JSON:\n%s\r\n", compact_json);
+  } else {
+    printf("Failed to parse JSON!\r\n");
+  }
+
+  // ✅ HTTP response is now in `response_buf`, call your NFC writer
+  write_json_to_nfc(compact_json, strlen(compact_json));
+}
+
+int parse_response_json(const char *json, ParsedData *out) {
+  const char *ptr = json;
+  int i = 0;
+  char prev_time[32] = {0};
+  int found_first = 0;
+  out->interval_sec = 0;  // Reset interval
+
+  while ((ptr = strstr(ptr, "{\"time\":\"")) && i < MAX_VALUES) {
+    ptr += 9;  // Move past "{\"time\":\""
+    const char *time_end = strchr(ptr, '"');
+    if (!time_end) break;
+    int len = time_end - ptr;
+    if (len >= sizeof(out->start_time)) len = sizeof(out->start_time) - 1;
+
+    char current_time[32];
+    strncpy(current_time, ptr, len);
+    current_time[len] = '\0';
+
+    if (!found_first) {
+      strcpy(out->start_time, current_time);
+      found_first = 1;
+      printf("📍 Start time set to: %s\n", out->start_time);
+    } else if (out->interval_sec == 0) {
+      // Strip trailing 'Z' if present for prev_time
+      char prev_trimmed[32];
+      size_t len_prev = strlen(prev_time);
+      if (len_prev > 0 && prev_time[len_prev - 1] == 'Z') {
+        strncpy(prev_trimmed, prev_time, len_prev - 1);
+        prev_trimmed[len_prev - 1] = '\0';
+      } else {
+        strcpy(prev_trimmed, prev_time);
+      }
+
+      // Strip trailing 'Z' if present for current_time
+      char curr_trimmed[32];
+      size_t len_curr = strlen(current_time);
+      if (len_curr > 0 && current_time[len_curr - 1] == 'Z') {
+        strncpy(curr_trimmed, current_time, len_curr - 1);
+        curr_trimmed[len_curr - 1] = '\0';
+      } else {
+        strcpy(curr_trimmed, current_time);
+      }
+
+      struct tm tm1 = {0}, tm2 = {0};
+      strptime(prev_trimmed, "%Y-%m-%dT%H:%M:%S", &tm1);
+      strptime(curr_trimmed, "%Y-%m-%dT%H:%M:%S", &tm2);
+      time_t t1 = mktime(&tm1);
+      time_t t2 = mktime(&tm2);
+
+      printf("⏱️ prev_time = %s (trimmed: %s) → %ld\n", prev_time, prev_trimmed, (long)t1);
+      printf("⏱️ current_time = %s (trimmed: %s) → %ld\n", current_time, curr_trimmed, (long)t2);
+
+      out->interval_sec = (int)difftime(t2, t1);
+      printf("📏 Calculated interval = %d seconds\n", out->interval_sec);
+    }
+
+    strcpy(prev_time, current_time);
+
+    // Find value
+    const char *val_ptr = strstr(time_end, "\"value\":");
+    if (!val_ptr) break;
+    float v = atof(val_ptr + 8);
+    out->values[i++] = v;
+
+  }
+
+  out->count = i;
+  return i > 0 ? 1 : 0;
+}
+
+// Creates compact JSON output
+void make_compact_json(const ParsedData *data, char *out_buf, size_t out_buf_size) {
+  int offset = snprintf(out_buf, out_buf_size,
+    "{\n  \"start\": \"%s\",\n  \"interval\": %d,\n  \"values\": [",
+    data->start_time, data->interval_sec);
+
+  for (int i = 0; i < data->count; i++) {
+    offset += snprintf(out_buf + offset, out_buf_size - offset,
+      (i < data->count - 1) ? "%.2f," : "%.2f", data->values[i]);
+  }
+
+  snprintf(out_buf + offset, out_buf_size - offset, "]\n}\n");
 }
 
 
@@ -438,22 +636,15 @@ int main(void)
   MX_I2C1_Init();
   /* USER CODE BEGIN 2 */
   mongoose_init();
-  uint32_t lastWriteTime = 0;
-  uint32_t lastHttpPollTime = 0;
   for (;;) {
     mongoose_poll();
 
-    uint32_t now = HAL_GetTick();
-    if (now - lastWriteTime >= 10000) {
-      HAL_GPIO_WritePin(GPIOB, GPIO_PIN_0, GPIO_PIN_SET); // Turn ON LED to indicate write
-      uint32_t start = HAL_GetTick();
-      write_snapshot_to_nfc(); // Takes ~800ms
-
-      uint32_t duration = HAL_GetTick() - start;
-      printf("NFC write duration: %lu ms\r\n", duration);
-
-      HAL_GPIO_WritePin(GPIOB, GPIO_PIN_0, GPIO_PIN_RESET); // Turn OFF LED after write
-      lastWriteTime = now;
+    if(!HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_6)){
+    	HAL_GPIO_WritePin(GPIOB, GPIO_PIN_0, GPIO_PIN_SET);
+    	HAL_Delay(5000);
+    	read_phone_request_json();
+    } else{
+    	HAL_GPIO_WritePin(GPIOB, GPIO_PIN_0, GPIO_PIN_RESET);
     }
 
     if(HAL_GPIO_ReadPin(GPIOC, GPIO_PIN_13)){
@@ -462,15 +653,7 @@ int main(void)
         wait_for_network_ready();
     	perform_http_data_read();
     	HAL_Delay(1000);
-    	parse_and_store_numbers(response_buf, strlen(response_buf), extracted_numbers, MAX_EXTRACTED_NUMBERS, &number_count);
-    	printf("Parsed %d numbers:\n", number_count);
-    	for (int i = 0; i < number_count; i++) {
-    	    printf("Value %d: %.3f\r\n", i, extracted_numbers[i]);
-    	}
-
-//    	printf("%s\r\n\r\n", data);
-//    	HAL_Delay(500);
-//    	extract_numbers(data);
+    	write_json_to_nfc(response_buf, response_len);
 
     }
   }
@@ -754,6 +937,12 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   HAL_GPIO_Init(B1_GPIO_Port, &GPIO_InitStruct);
+
+  /*Configure GPIO pin : PA6 */
+  GPIO_InitStruct.Pin = GPIO_PIN_6;
+  GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
 
   /*Configure GPIO pins : LED_GREEN_Pin LED_RED_Pin */
   GPIO_InitStruct.Pin = LED_GREEN_Pin|LED_RED_Pin;

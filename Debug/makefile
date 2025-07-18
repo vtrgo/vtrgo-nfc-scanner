@@ -35,34 +35,34 @@ $(wildcard ../makefile.init) \
 $(wildcard ../makefile.targets) \
 
 
-BUILD_ARTIFACT_NAME := vtrModbusTCP-H723ZG2
+BUILD_ARTIFACT_NAME := HTTP_Only
 BUILD_ARTIFACT_EXTENSION := elf
 BUILD_ARTIFACT_PREFIX :=
 BUILD_ARTIFACT := $(BUILD_ARTIFACT_PREFIX)$(BUILD_ARTIFACT_NAME)$(if $(BUILD_ARTIFACT_EXTENSION),.$(BUILD_ARTIFACT_EXTENSION),)
 
 # Add inputs and outputs from these tool invocations to the build variables 
 EXECUTABLES += \
-vtrModbusTCP-H723ZG2.elf \
+HTTP_Only.elf \
 
 MAP_FILES += \
-vtrModbusTCP-H723ZG2.map \
+HTTP_Only.map \
 
 SIZE_OUTPUT += \
 default.size.stdout \
 
 OBJDUMP_LIST += \
-vtrModbusTCP-H723ZG2.list \
+HTTP_Only.list \
 
 
 # All Target
 all: main-build
 
 # Main-build Target
-main-build: vtrModbusTCP-H723ZG2.elf secondary-outputs
+main-build: HTTP_Only.elf secondary-outputs
 
 # Tool invocations
-vtrModbusTCP-H723ZG2.elf vtrModbusTCP-H723ZG2.map: $(OBJS) $(USER_OBJS) C:\Users\electrical\STM32CubeIDE\workspace_1.18.1\vtrModbusTCP-H723ZG2\STM32H723ZGTX_FLASH.ld makefile objects.list $(OPTIONAL_TOOL_DEPS)
-	arm-none-eabi-gcc -o "vtrModbusTCP-H723ZG2.elf" @"objects.list" $(USER_OBJS) $(LIBS) -mcpu=cortex-m7 -T"C:\Users\electrical\STM32CubeIDE\workspace_1.18.1\vtrModbusTCP-H723ZG2\STM32H723ZGTX_FLASH.ld" --specs=nosys.specs -Wl,-Map="vtrModbusTCP-H723ZG2.map" -Wl,--gc-sections -static -u _printf_float --specs=nano.specs -mfpu=fpv5-d16 -mfloat-abi=hard -mthumb -Wl,--start-group -lc -lm -Wl,--end-group
+HTTP_Only.elf HTTP_Only.map: $(OBJS) $(USER_OBJS) C:\Users\electrical\STM32CubeIDE\workspace_1.18.1\HTTP_Only\STM32H723ZGTX_FLASH.ld makefile objects.list $(OPTIONAL_TOOL_DEPS)
+	arm-none-eabi-gcc -o "HTTP_Only.elf" @"objects.list" $(USER_OBJS) $(LIBS) -mcpu=cortex-m7 -T"C:\Users\electrical\STM32CubeIDE\workspace_1.18.1\HTTP_Only\STM32H723ZGTX_FLASH.ld" --specs=nosys.specs -Wl,-Map="HTTP_Only.map" -Wl,--gc-sections -static -u _printf_float --specs=nano.specs -mfpu=fpv5-d16 -mfloat-abi=hard -mthumb -Wl,--start-group -lc -lm -Wl,--end-group
 	@echo 'Finished building target: $@'
 	@echo ' '
 
@@ -71,14 +71,14 @@ default.size.stdout: $(EXECUTABLES) makefile objects.list $(OPTIONAL_TOOL_DEPS)
 	@echo 'Finished building: $@'
 	@echo ' '
 
-vtrModbusTCP-H723ZG2.list: $(EXECUTABLES) makefile objects.list $(OPTIONAL_TOOL_DEPS)
-	arm-none-eabi-objdump -h -S $(EXECUTABLES) > "vtrModbusTCP-H723ZG2.list"
+HTTP_Only.list: $(EXECUTABLES) makefile objects.list $(OPTIONAL_TOOL_DEPS)
+	arm-none-eabi-objdump -h -S $(EXECUTABLES) > "HTTP_Only.list"
 	@echo 'Finished building: $@'
 	@echo ' '
 
 # Other Targets
 clean:
-	-$(RM) default.size.stdout vtrModbusTCP-H723ZG2.elf vtrModbusTCP-H723ZG2.list vtrModbusTCP-H723ZG2.map
+	-$(RM) HTTP_Only.elf HTTP_Only.list HTTP_Only.map default.size.stdout
 	-@echo ' '
 
 secondary-outputs: $(SIZE_OUTPUT) $(OBJDUMP_LIST)
