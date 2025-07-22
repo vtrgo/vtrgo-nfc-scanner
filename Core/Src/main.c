@@ -57,6 +57,15 @@ typedef struct {
   float values[MAX_VALUES];
   int count;
 } ParsedData;
+
+typedef struct {
+  char *buffer;         // Will point to g_json_response_buffer
+  size_t buffer_size;   // Will be MAX_JSON_SIZE
+  size_t current_len;   // How much data we've copied so far
+  bool transfer_complete; // Flag to signal the main loop
+  bool error_occurred;    // Flag for errors
+} http_transfer_state_t;
+
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -194,13 +203,22 @@ void perform_http_data_read(void) {
 
 
 
+
 void wait_for_network_ready(void) {
   uint32_t start = HAL_GetTick();
-  while (HAL_GetTick() - start < 500) {
-    mongoose_poll();   // gives time for ARP retry and TCP/IP setup
+  while (HAL_GetTick() - start < 2000) {
+    mongoose_poll();
     HAL_Delay(1);
   }
+
+  // Force ARP resolution with a dummy connection
+  struct mg_connection *warmup = mg_connect(&g_mgr, "tcp://192.168.1.133:80", NULL, NULL);
+  if (warmup != NULL) {
+    mg_mgr_poll(&g_mgr, 100);
+    warmup->is_closing = 1;
+  }
 }
+
 
 
 
@@ -514,72 +532,80 @@ void perform_http_get(const char *path) {
 int parse_response_json(const char *json, ParsedData *out) {
   const char *ptr = json;
   int i = 0;
-  char prev_time[32] = {0};
+  char prev_time_str[32] = {0};
   int found_first = 0;
-  out->interval_sec = 0;  // Reset interval
+  out->interval_sec = 0;
+  out->count = 0;
+  float last_value = 0.0;
+  time_t expected_time = 0;
 
   while ((ptr = strstr(ptr, "{\"time\":\"")) && i < MAX_VALUES) {
     ptr += 9;  // Move past "{\"time\":\""
     const char *time_end = strchr(ptr, '"');
     if (!time_end) break;
+
     int len = time_end - ptr;
     if (len >= sizeof(out->start_time)) len = sizeof(out->start_time) - 1;
 
-    char current_time[32];
-    strncpy(current_time, ptr, len);
-    current_time[len] = '\0';
+    char current_time_str[32];
+    strncpy(current_time_str, ptr, len);
+    current_time_str[len] = '\0';
 
-    if (!found_first) {
-      strcpy(out->start_time, current_time);
-      found_first = 1;
-      printf("📍 Start time set to: %s\n", out->start_time);
-    } else if (out->interval_sec == 0) {
-      // Strip trailing 'Z' if present for prev_time
-      char prev_trimmed[32];
-      size_t len_prev = strlen(prev_time);
-      if (len_prev > 0 && prev_time[len_prev - 1] == 'Z') {
-        strncpy(prev_trimmed, prev_time, len_prev - 1);
-        prev_trimmed[len_prev - 1] = '\0';
-      } else {
-        strcpy(prev_trimmed, prev_time);
-      }
+    // Parse timestamp into struct tm
+    char trimmed[32];
+    strncpy(trimmed, current_time_str, sizeof(trimmed));
+    size_t len_trimmed = strlen(trimmed);
+    if (trimmed[len_trimmed - 1] == 'Z') trimmed[len_trimmed - 1] = '\0';
 
-      // Strip trailing 'Z' if present for current_time
-      char curr_trimmed[32];
-      size_t len_curr = strlen(current_time);
-      if (len_curr > 0 && current_time[len_curr - 1] == 'Z') {
-        strncpy(curr_trimmed, current_time, len_curr - 1);
-        curr_trimmed[len_curr - 1] = '\0';
-      } else {
-        strcpy(curr_trimmed, current_time);
-      }
+    struct tm tm = {0};
+    strptime(trimmed, "%Y-%m-%dT%H:%M:%S", &tm);
+    time_t current_time = mktime(&tm);
 
-      struct tm tm1 = {0}, tm2 = {0};
-      strptime(prev_trimmed, "%Y-%m-%dT%H:%M:%S", &tm1);
-      strptime(curr_trimmed, "%Y-%m-%dT%H:%M:%S", &tm2);
-      time_t t1 = mktime(&tm1);
-      time_t t2 = mktime(&tm2);
-
-      printf("⏱️ prev_time = %s (trimmed: %s) → %ld\n", prev_time, prev_trimmed, (long)t1);
-      printf("⏱️ current_time = %s (trimmed: %s) → %ld\n", current_time, curr_trimmed, (long)t2);
-
-      out->interval_sec = (int)difftime(t2, t1);
-      printf("📏 Calculated interval = %d seconds\n", out->interval_sec);
-    }
-
-    strcpy(prev_time, current_time);
-
-    // Find value
+    // Get value
     const char *val_ptr = strstr(time_end, "\"value\":");
     if (!val_ptr) break;
     float v = atof(val_ptr + 8);
-    out->values[i++] = v;
 
+    if (!found_first) {
+      strcpy(out->start_time, current_time_str);
+      expected_time = current_time;
+      found_first = 1;
+      last_value = v;
+      out->values[i++] = v;
+    } else {
+      if (out->interval_sec == 0) {
+        // Compute interval from previous and current timestamps
+        char prev_trimmed[32];
+        strncpy(prev_trimmed, prev_time_str, sizeof(prev_trimmed));
+        size_t len_prev = strlen(prev_trimmed);
+        if (prev_trimmed[len_prev - 1] == 'Z') prev_trimmed[len_prev - 1] = '\0';
+
+        struct tm tm_prev = {0};
+        strptime(prev_trimmed, "%Y-%m-%dT%H:%M:%S", &tm_prev);
+        time_t prev_time = mktime(&tm_prev);
+        out->interval_sec = (int)difftime(current_time, prev_time);
+        expected_time = prev_time + out->interval_sec;
+      }
+
+      // Fill in missing values using last_value
+      while (expected_time < current_time && i < MAX_VALUES) {
+        out->values[i++] = last_value;
+        expected_time += out->interval_sec;
+      }
+
+      // Insert current value
+      out->values[i++] = v;
+      last_value = v;
+      expected_time += out->interval_sec;
+    }
+
+    strcpy(prev_time_str, current_time_str);
   }
 
   out->count = i;
-  return i > 0 ? 1 : 0;
+  return (i > 0) ? 1 : 0;
 }
+
 
 // Creates compact JSON output
 void make_compact_json(const ParsedData *data, char *out_buf, size_t out_buf_size) {
@@ -593,6 +619,7 @@ void make_compact_json(const ParsedData *data, char *out_buf, size_t out_buf_siz
   }
 
   snprintf(out_buf + offset, out_buf_size - offset, "]\n}\n");
+  printf("Number of values: %d\n", data->count);
 }
 
 
@@ -648,13 +675,15 @@ int main(void)
     }
 
     if(HAL_GPIO_ReadPin(GPIOC, GPIO_PIN_13)){
+    	HAL_GPIO_WritePin(GPIOB, GPIO_PIN_14, GPIO_PIN_SET);
     	HAL_Delay(500);
     	glue_update_state();
         wait_for_network_ready();
     	perform_http_data_read();
     	HAL_Delay(1000);
     	write_json_to_nfc(response_buf, response_len);
-
+    } else{
+    	HAL_GPIO_WritePin(GPIOB, GPIO_PIN_14, GPIO_PIN_RESET);
     }
   }
 

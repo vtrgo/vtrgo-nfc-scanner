@@ -2454,18 +2454,15 @@ static int skip_chunk(const char *buf, int len, int *pl, int *dl) {
 
 static void http_cb(struct mg_connection *c, int ev, void *ev_data) {
 	if(ev!=2){
-		printf("📡 Event received: %d\n", ev);
 	}
   if (ev == MG_EV_READ || ev == MG_EV_CLOSE ||
       (ev == MG_EV_POLL && c->is_accepted && !c->is_draining &&
        c->recv.len > 0)) {  // see #2796
-	printf("🧾 Received %lu bytes\n", c->recv.len);
     struct mg_http_message hm;
     size_t ofs = 0;  // Parsing offset
     while (c->is_resp == 0 && ofs < c->recv.len) {
       const char *buf = (char *) c->recv.buf + ofs;
       int n = mg_http_parse(buf, c->recv.len - ofs, &hm);
-      printf("🔍 Parsing HTTP headers at offset %lu, result: %d\n", ofs, n);
       struct mg_str *te;  // Transfer - encoding header
       bool is_chunked = false;
       size_t old_len = c->recv.len;
@@ -2489,10 +2486,8 @@ static void http_cb(struct mg_connection *c, int ev, void *ev_data) {
       if (ev == MG_EV_CLOSE) {           // If client did not set Content-Length
         hm.message.len = c->recv.len - ofs;  // and closes now, deliver MSG
         hm.body.len = hm.message.len - (size_t) (hm.body.buf - hm.message.buf);
-        printf("⚠️  Connection closed, setting message.len to %lu\n", hm.message.len);
       }
       if ((te = mg_http_get_header(&hm, "Transfer-Encoding")) != NULL) {
-          printf("📦 Transfer-Encoding: %.*s\n", (int)te->len, te->buf);
         if (mg_strcasecmp(*te, mg_str("chunked")) == 0) {
           is_chunked = true;
         } else {
@@ -2526,14 +2521,12 @@ static void http_cb(struct mg_connection *c, int ev, void *ev_data) {
       if (is_chunked) {
         // For chunked data, strip off prefixes and suffixes from chunks
         // and relocate them right after the headers, then report a message
-    	  printf("🔄 Processing chunked transfer encoding\n");
         char *s = (char *) c->recv.buf + ofs + n;
         int o = 0, pl, dl, cl, len = (int) (c->recv.len - ofs - (size_t) n);
 
         // Find zero-length chunk (the end of the body)
         while ((cl = skip_chunk(s + o, len - o, &pl, &dl)) > 0 && dl) o += cl;
         if (cl == 0){
-        	printf("⏳ Incomplete chunked body, waiting for more data\n");
         	break;  // No zero-len chunk, buffer more data
         }
         if (cl < 0) {
@@ -2549,15 +2542,12 @@ static void http_cb(struct mg_connection *c, int ev, void *ev_data) {
           if (dl == 0) break;
         }
         ofs += (size_t) (n + o);
-        printf("✅ Chunked message fully assembled: body.len=%lu\n", hm.body.len);
       } else {  // Normal, non-chunked data
         size_t len = c->recv.len - ofs - (size_t) n;
         if (hm.body.len > len){
-        	printf("⏳ Incomplete body, need more data: have=%lu, want=%lu\n", len, hm.body.len);
         	break;  // Buffer more data
         }
         ofs += (size_t) n + hm.body.len;
-        printf("✅ Non-chunked message complete: body.len=%lu\n", hm.body.len);
       }
 
       if (c->is_accepted) c->is_resp = 1;  // Start generating response
@@ -2565,14 +2555,12 @@ static void http_cb(struct mg_connection *c, int ev, void *ev_data) {
       if (c->is_accepted && !c->is_resp) {
         struct mg_str *cc = mg_http_get_header(&hm, "Connection");
         if (cc != NULL && mg_strcasecmp(*cc, mg_str("close")) == 0) {
-        	printf("🔚 Connection: close header detected, setting is_draining\n");
           c->is_draining = 1;  // honor "Connection: close"
           break;
         }
       }
     }
     if (ofs > 0){
-    	printf("🧹 Cleaning up %lu processed bytes from recv buffer\n", ofs);
     	mg_iobuf_del(&c->recv, 0, ofs);  // Delete processed data
     }
   }
