@@ -1,0 +1,21 @@
+name: Mirror from Org
+
+on:
+  schedule:
+    - cron: '0 * * * *' # runs every hour
+  workflow_dispatch: # allows manual triggering
+
+jobs:
+  mirror:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout personal repo
+        uses: actions/checkout@v3
+
+      - name: Mirror org repo
+        run: |
+          git remote add vtrgo https://x-access-token:${{ secrets.ORG_REPO_TOKEN }}@github.com/vtrgo/VTR_Scanner_Stm.git || true
+          git fetch vtrgo
+          git merge vtrgo/main --allow-unrelated-histories -m "Merge updates from org repo"
+          git push origin main
