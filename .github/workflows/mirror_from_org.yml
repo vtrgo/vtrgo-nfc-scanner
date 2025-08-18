@@ -2,8 +2,8 @@ name: Mirror from Org
 
 on:
   schedule:
-    - cron: '0 * * * *' # runs every hour
-  workflow_dispatch: # allows manual triggering
+    - cron: '0 * * * *'  # every hour
+  workflow_dispatch:
 
 jobs:
   mirror:
@@ -13,9 +13,34 @@ jobs:
       - name: Checkout personal repo
         uses: actions/checkout@v3
 
-      - name: Mirror org repo
+      - name: Mirror org repo with debug
+        env:
+          ORG_REPO_TOKEN: ${{ secrets.ORG_REPO_TOKEN }}
         run: |
-          git remote add vtrgo https://x-access-token:${{ secrets.ORG_REPO_TOKEN }}@github.com/vtrgo/VTR_Scanner_Stm.git || true
-          git fetch vtrgo
-          git merge vtrgo/main --allow-unrelated-histories -m "Merge updates from org repo"
-          git push origin main
+          set -e
+
+          ORG_REPO_URL="https://x-access-token:${ORG_REPO_TOKEN}@github.com/vtrgo/VTR_Scanner_Stm.git"
+          echo "Using org repo URL: $ORG_REPO_URL"
+
+          # Remove existing remote if it exists
+          git remote remove vtrgo || echo "No existing remote"
+
+          # Add remote
+          git remote add vtrgo $ORG_REPO_URL
+
+          # Fetch org repo
+          echo "Fetching org repo..."
+          git fetch vtrgo || { echo "Failed to fetch org repo"; exit 1; }
+
+          # Show last 5 commits from org repo
+          echo "Last 5 commits from org repo:"
+          git log vtrgo/main -5 --oneline || echo "No commits found"
+
+          # Merge changes
+          git merge vtrgo/main --allow-unrelated-histories -m "Merge updates from org repo" || echo "No changes to merge"
+
+          # Push to personal repo
+          git push origin main || { echo "Failed to push changes"; exit 1; }
+
+      - name: List remotes for debugging
+        run: git remote -v
