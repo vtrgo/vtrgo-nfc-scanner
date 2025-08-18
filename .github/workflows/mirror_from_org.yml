@@ -1,19 +1,19 @@
-name: Mirror from Org
+name: Mirror Org Repo to Personal Repo (Merge)
 
 on:
   schedule:
-    - cron: '0 * * * *'  # every hour
+    - cron: '0 * * * *' # every hour
   workflow_dispatch:
 
 jobs:
-  mirror:
+  merge:
     runs-on: ubuntu-latest
 
     steps:
       - name: Checkout personal repo
         uses: actions/checkout@v3
 
-      - name: Mirror org repo with debug
+      - name: Merge org repo
         env:
           ORG_REPO_TOKEN: ${{ secrets.ORG_REPO_TOKEN }}
         run: |
@@ -22,25 +22,23 @@ jobs:
           ORG_REPO_URL="https://x-access-token:${ORG_REPO_TOKEN}@github.com/vtrgo/VTR_Scanner_Stm.git"
           echo "Using org repo URL: $ORG_REPO_URL"
 
-          # Remove existing remote if it exists
+          # Remove old remote if exists
           git remote remove vtrgo || echo "No existing remote"
 
-          # Add remote
+          # Add org remote
           git remote add vtrgo $ORG_REPO_URL
 
           # Fetch org repo
-          echo "Fetching org repo..."
-          git fetch vtrgo || { echo "Failed to fetch org repo"; exit 1; }
+          git fetch vtrgo
 
-          # Show last 5 commits from org repo
-          echo "Last 5 commits from org repo:"
-          git log vtrgo/main -5 --oneline || echo "No commits found"
+          # Checkout main branch
+          git checkout main
 
-          # Merge changes
-          git merge vtrgo/main --allow-unrelated-histories -m "Merge updates from org repo" || echo "No changes to merge"
+          # Merge org main into personal main
+          git merge --allow-unrelated-histories vtrgo/main -m "Merge updates from org repo"
 
-          # Push to personal repo
-          git push origin main || { echo "Failed to push changes"; exit 1; }
+          # Push changes to personal repo
+          git push origin main
 
-      - name: List remotes for debugging
+      - name: List remotes
         run: git remote -v
