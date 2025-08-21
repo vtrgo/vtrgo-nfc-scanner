@@ -1,3 +1,0 @@
-- name: Debug secret
-  run: |
-    echo "Token length: ${#ORG_REPO_TOKEN}"
